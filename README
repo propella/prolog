@@ -1,0 +1,19 @@
+A pure prolog interpreter
+
+* Getting started
+
+$ runghc Prolog.hs
+or
+
+$ hugs Prolog.hs 
+Prolog> main
+
+* Command
+
+food(apple). -- Add a clause.
+?- food(X).  -- Query.
+??           -- Show all.
+
+* Example
+
+runghc Prolog.hs < demo.prolog
