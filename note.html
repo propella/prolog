@@ -1,0 +1,257 @@
+<h3>Prolog In Haskell</h3>
+
+<p>I have been obsessed by Prolog language recent weeks. While I first
+learned Prolog long time ago, and actually I was attracted, I have
+never used it fluently because it's too hard to get familiar without
+any practical necessity.  Although, there are a lot of interesting
+literatures which require certain knowledge of logic programming in
+computer science. So, I decided to do another approach; writing a
+Prolog interpreter to learn Prolog.</p>
+
+<p>I chose Haskell as the implementation language because of its
+succinctness. I'm a beginner Haskell programmer, and I thought it was
+also a good opportunity to learn Prolog and Haskell same time! The
+starting point was a Prolog implementation in Hug98 distribution
+<a href="http://darcs.haskell.org/hugs98/demos/prolog/">http://darcs.haskell.org/hugs98/demos/prolog/</a>. I
+think this is a great Haskell program, but its too difficult to
+me. Rewriting it as my level would be a good exercise.
+</p>
+
+<h4>Data structures</h4>
+
+<p>Here is my version of Prolog in Haskell.  Entire program is about
+200+ lines. There is no cut operator but it has a list notation so
+that you can write [apple, orange | banana] stile literal. Let's take
+a look at the first part.
+</p>
+
+<pre>
+module Prolog
+    (Term(..), Clause(..), w, s, cons,
+     parse, parse',
+     atom, variable, struct, list, nil, terms, arguments, term, clause, clauses, query,
+     display,
+     unify, unifyList, applyTerm, prove, rename, solveString) where
+
+import Text.ParserCombinators.Parsec
+import Data.Maybe
+import Char
+</pre>
+
+<p>I used Parsec as a parser, and defined some data structures. </p>
+
+<pre>
+infix 6 :-
+data Term    = Var String Int | Struct String [Term] deriving (Show, Eq)
+data Clause  = Term :- [Term]                        deriving (Show, Eq)
+data Command = Fact Clause | Query [Term] | ShowAll | Noop
+
+type Rules = [Clause]
+type Substitution = [(Term, Term)]
+</pre>
+
+
+<p>Term represents Prolog's term like "apple" or "father(abe,
+homer)". It can be a variable, or a structure. A variable has an index
+number which I used it later to distinct a same variable name in
+different contexts. A simple term like "apple" is also represented as
+a structure without elements like <code>Struct "apple" []</code>.
+</p>
+
+<p>Clause is a Prolog rule like "mortal(X) :- man(X)". I stole a user
+defined operator constructor ":-" from original Hugs' Prolog to write
+a Haskell expression in Prolog like. So "mortal(X) :- man(X)" in
+Haskell expression becomes <code>Struct "mortal" [Var "X" 0] :-
+[(Struct "man" [Var "X" 0])]</code>. Well, it's not quite
+nice. Although the parser will provide better notation later, I have
+to use this expression when debugging the interpreter meanwhile. Its
+cumbersome. So I made up tiny utility functions to make Prolog data
+easier.
+</p>
+
+<pre>
+-- Utility constructors for debugging
+w :: String -&gt; Term
+w s@(x:xs) | isUpper x = Var s 0
+           | otherwise = Struct s []
+
+s :: String -&gt; [Term] -&gt; Term
+s n xs = Struct n xs
+
+cons s cdr = (Struct &quot;cons&quot; [w s, cdr])
+</pre>
+
+Using this functions, now "mortal(X) :- man(X)" is written as <code>
+s"mortal" [w"X"] :- [s"man" [w"X"]] </code>. It is much better, isn't
+it?
+
+<h4>Unification</h4>
+
+<p> By the way, I like the word unification. It sounds peace and
+spiritual! Unification is one of two most peculiar concept in Prolog
+(another one is the control structure by depth first
+search). Unification is solving a logical equation. For example, the
+answer of "[X, orange] = [apple, Y]" must be X = apple, and Y =
+orange. It is almost same as variable binding in a normal programming
+language, but tricky part is that a direction is symmetry, so X = Y
+and Y = X is same meaning. How can it be possibly implemented?? Think
+about the data structure of the answer at first.
+</p>
+
+<pre>
+---- Unification ----
+
+type Substitution = [(Term, Term)]
+true = []
+</pre>
+
+<p> I used a list of tuples of terms, or an associate list to
+represent a substitution. For example, "X = apple, Y = orange" is
+represented as [(X, apple), (Y, orange)] (in actual Haskell
+code, <code> [(w"X", w"apple"), (w"Y", w"orange")] </code>). A tuple
+of left hand side is always a variable name, and right hand side is
+any term, concrete value preferably. The goal of unification is making
+associations with variable and term. To make this process easier,
+"transitive" substitution is allowed. Think about an equation "X = Y,
+Y = banana". It is represented like [(X, Y), (Y, banana)], which is
+solved as X = banana, and Y = banana in apply function. Let's look at
+the implementation.
+
+<pre>
+-- apply [(w&quot;X&quot;, w&quot;Y&quot;), (w&quot;Y&quot;, w&quot;Z&quot;)] [(w&quot;X&quot;), (w&quot;Y&quot;)] == [(w&quot;Z&quot;), (w&quot;Z&quot;)]
+apply :: Substitution -&gt; [Term] -&gt; [Term]
+apply s ts = [applyTerm s t | t &lt;- ts]
+
+applyTerm [] (Var y n)                                  = Var y n
+applyTerm ((Var x i, t):s) (Var y j) | x == y &amp;&amp; i == j = applyTerm s t
+                                     | otherwise        = applyTerm s (Var y j)
+applyTerm s (Struct n ts)                               = Struct n (apply s ts)
+</pre>
+
+<p>The function apply substitutes a variable name of its value. To
+support transitive apply, applyTerm is called recursively if the value
+is also a variable. But it can solve only one way. Think about opposite
+case "Y = banana, X = Y". Apply can't find the fact X = banana because
+"Y = banana" is appeared before. So what I should do is applying X = Y
+before adding the substitution.
+</p>
+
+<table border="1">
+<tr><td></td><td>Equation</td><td>Substitution(solution)</td></td></tr>
+<tr><td>1</td><td>Y = banana, X = Y</td><td></td></tr>
+<tr><td>2</td><td>X = Y</td><td>Y = banana (append)</td></tr>
+<tr><td>3</td><td>X = banana (apply: Y = banana) </td><td>Y = banana</td></tr>
+<tr><td>4</td><td></td><td>Y = banana, X = banana (append)</td></tr>
+</table>
+
+<p>I suppose that this two fold way solve all of logical
+equation. Apply is always needed before append it to the
+solution. Actual source implementation seems to be complicated because
+there are cases where a variable can appears any side, and sometimes
+there is no solution. To represent no-answer case, a Maybe monad is
+used. So there are variations such as;
+</p>
+
+<ul>
+<li> No Answer : Nothing </li>
+<li> Always true (like apple = apple) : Just true (true is a synonym of empty list []) </li>
+<li> Substitution found : Just [X = some answer...] </li>
+</ul>
+
+<pre>
+-- unify (w&quot;X&quot;) (w&quot;apple&quot;) == Just [(w&quot;X&quot;, w&quot;apple&quot;)]
+unify :: Term -&gt; Term -&gt; Maybe Substitution
+unify (Var x n) (Var y m) = Just [(Var x n, Var y m)]
+unify (Var x n)      y    = Just [(Var x n,       y)]
+unify      x    (Var y m) = Just [(Var y m,       x)]
+unify (Struct a xs) (Struct b ys)
+      | a == b = unifyList xs ys
+      | otherwise   = Nothing
+
+unifyList :: [Term] -&gt; [Term] -&gt; Maybe Substitution
+unifyList [] [] = Just true
+unifyList [] _ = Nothing
+unifyList _ [] = Nothing
+unifyList (x:xs) (y:ys) = do s &lt;- unify x y
+                             s' &lt;- unifyList (apply s xs) (apply s ys)
+                             return (s ++ s')
+</pre>
+
+<p>Note that I just use append (++) to add a new substation in
+unifyList. But if you design carefully, recursive apply is not
+necessary. Using something like a map is a better idea.
+</p>
+
+<h4>Solver</h4>
+
+<p>As a programming language, Prolog is unique as it has no explicit
+control structure. Instead, a Prolog program can be seen as a big
+nested if then else statement. This find and branch functions are
+implemented of this behavior. While unification is a technique of how
+to solve a equation, solver deals with when each equation should be
+solved.  There are two most important concepts to understand control
+structures in Prolog.
+</p>
+
+<ul>
+<li>Goals (AND relationship) : are terms which should be solved.</li>
+<li>Branches (OR relationship) : are options which might have a solution</li>
+</ul>
+
+<p> A proof's fate is decided by branch function, branch function
+returns a list of goals (with corresponding substitutions). If the
+list is empty, this branch is failed. If the list includes empty goal,
+it is actually succeed because empty goal means that it is unified
+against a fact like "food(apple).". Well, is it complicated?
+</p>
+
+<ul>
+<li> If branch returns [] &lt;--- this is failed </li>
+<li> If branch returns [ [some goals] [some goals] [(empty)] &lt;--- this is succeed! ]  </li>
+</ul>
+
+The goal of find function is traverse all of goals to find whether if
+it is true or false.
+
+<pre>
+---- Solver ----
+
+prove :: Rules -&gt; [Term] -&gt; [Substitution]
+prove rules goals = find rules 1 goals
+
+-- Depth first search
+-- find (parse' clauses &quot;p(X):-q(X). q(a).&quot;) 1 [parse' term &quot;p(X)&quot;]
+find :: Rules -&gt; Int -&gt; [Term] -&gt; [Substitution]
+find rules i [] = [true]
+find rules i goals = do let rules' = rename rules i
+                        (s, goals') &lt;- branch rules' goals
+                        solution &lt;- find rules (i + 1) goals'
+                        return (s ++ solution)
+
+-- Find next branches. A branch is a pair of substitution and next goals.
+-- branch (parse' clauses &quot;n(z). n(s(X)):-n(X).&quot;) (parse' query &quot;?-n(X).&quot;)
+branch :: Rules -&gt; [Term] -&gt; [(Substitution, [Term])]
+branch rules (goal:goals) = do head :- body &lt;- rules
+                               s &lt;- maybeToList (unify goal head)
+                               return (s, apply s (body ++ goals))
+</pre>
+
+<p> Find function has an argument for index number to show the depth
+of the tree. This number is used to rename all variables used in whole
+rules. This is necessary because same variable name in different
+clauses are actually represented different variables.</p>
+
+<pre>
+-- Rename all variables in the rules to split namespaces.
+rename :: Rules -&gt; Int -&gt; Rules
+rename rules i = [ renameVar head :- renameVars body | head :- body &lt;- rules]
+    where renameVar (Var s _)     = Var s i
+          renameVar (Struct s ts) = Struct s (renameVars ts)
+          renameVars ts           = [renameVar t | t &lt;- ts]
+</pre>
+
+I have only explained evaluator part of the REPL, but still there are
+reader, printer, and loop. You can browse and download whole source
+code
+from <a href="http://github.com/propella/prolog/tree">http://github.com/propella/prolog/tree</a>.
+Someday I might write some of interesting topics in the program...

@@ -1,0 +1,175 @@
+-*- outline -*-
+
+* Prolog を Haskell で書く。
+
+Prolog インタプリタを Haskell で書きました。しばらく書いただけで満足してしまっていたのですが、このまま人知れず消えて行くのも寂しいので勉強した事を書きます。まず、参考にしたソースは前回書いた <a href="http://darcs.haskell.org/hugs98/demos/prolog/">hugs98/demos/prolog/</a> です。このソース。大変短くて良いのですが、素人目には簡潔すぎて難しいのと、書かれたのが古いのか do 記法を全く使っていないので、そこらへんを私風にアレンジしました。ソースを http://github.com/propella/prolog/tree に置いておきます。なお、言葉の使い方とか間違ってるかもしれないので気づいた人は教えてください。
+
+** 実行
+
+実行の仕方は <a href="http://github.com/propella/prolog/raw/bceaa34ea450a30ac9506f063af10c771adab2d7/Prolog.hs">Prolog.hs</a> をダウンロードして、
+
+>||
+runghc Prolog.hs
+||<
+です。food(apple). のようにするとルールに追加で、?- apple(X). で問い合わせ、?? で全部のルールを表示します。
+>||
+runghc Prolog.hs < demo.prolog
+||<
+のようにするとテキストファイルに書かれた物を実行する事が出来ます。
+
+** データ構造
+
+では早速中身をご紹介します。
+>|haskell|
+module Prolog
+    (Term(..), Clause(..), w, s, cons,
+     parse, parse',
+     atom, variable, struct, list, nil, terms, arguments, term, clause, clauses, query,
+     display,
+     unify, unifyList, applyTerm, prove, rename, solveString) where
+
+import Text.ParserCombinators.Parsec
+import Data.Maybe (maybeToList)
+import Char (isUpper)
+||<
+
+関数を沢山エキスポートしてるのはユニットテストで使いたかったからです。ライブラリは、パーサとして Parsec を使ってます。あと、maybeToLst と isUpper をインポートしてます。
+
+>|haskell|
+
+infix 6 :-
+data Term    = Var String Int | Struct String [Term] deriving (Show, Eq)
+data Clause  = Term :- [Term]                        deriving (Show, Eq)
+data Command = Fact Clause | Query [Term] | ShowAll | Noop
+
+type Rules = [Clause]
+||<
+
+ここで Prolog のデータを定義しています。Prolog の項は変数 Var または述語 Struct です。変数は変数名だけで良さそうな物ですが、Prolog の変数のスコープは一つのルール内だけなので、区別するために後で番号を付けます。それで Var String Int となっています。述語には apple のような単純なやつと、succ(zero) のような構造を持った奴の二通りありますが、単純なやつも引き数がゼロの構造として扱います。つまり、apple と apple() は同じ意味です。節は Clause として定義しています。Haskell はコンストラクタにも演算子が使えるので、なんとなく Prolog っぽく表現出来ます。あと Command はインタラクティブループで使います。
+
+これで Prolog のデータを Haskell のデータとして表現出来ますが、かなり煩雑です。例えば"mortal(X) :- man(X)" は Struct "mortal" [Var "X" 0] :- [(Struct "man" [Var "X" 0])] のようになってしまいます。これではテストケースを書くのが大変なので、便利関数を作っておきます。便利関数を使うと s"mortal" [w"X"] :- [s"man" [w"X"] ] になってちょっとましです。
+
+>|haskell|
+-- Utility constructors for debugging
+w :: String -> Term
+w s@(x:xs) | isUpper x = Var s 0
+           | otherwise = Struct s []
+
+s :: String -> [Term] -> Term
+s n xs = Struct n xs
+
+cons s cdr = (Struct "cons" [w s, cdr])
+||<
+
+** ユニフィケーション
+
+ユニフィケーションというのは要するに超簡単な方程式を解く事です。例えば、(X, orange) = (apple, Y) という方程式があったら、それぞれ分からない部分を埋め合わせて X = apple で Y = orange という答えを求めるのがユニフィケーションです。ここではこの答えを表現するのに、[(変数, 内容)] というペアのリスト Substitution、いわゆる連想リストを使います。
+
+>|haskell|
+---- Unification ----
+
+type Substitution = [(Term, Term)]
+||<
+
+先ほどの例で答えを得るには、
+
+- 前どうし、後どうしをペアにする。[(X, apple), (orange, Y)]
+- 変数が左に来るようにする。[(X, apple), (Y, orange)]
+
+とこれだけなので簡単です。では (X, Y) = (Y, banana). という方程式はどうでしょうか？継ぎ足すと、[(X, Y), (Y, banana)] というリストが出来ます。ここから X を求めるには、
+
+- 右辺が変数のときはその変数でさらに再帰的に残りを探す。
+- リストを継ぎ足す時にさらに変形して [(X, banana), (Y, banana)] にする。
+
+の二通りのやりかたがあると思います。変数の参照が追加より多いときには前者の方が遅いですが簡単でデバッグしやすいので前者を使います。
+
+ではさらに難しい問題 (X, Y) = (banana, X) はどうでしょうか？これを継ぎ足すと [(X, banana), (Y, X)] になり、X は求まりますが、Y を求めるには前からもう一度検索しなくてはなりません。一回のユニフィケーションで全ての変数の値が求まらない場合、再び前から検索すると無限ループになってしまうので、これは無理です。
+
+この場合、X が banana である事は分かっているので、継ぎ足す前に (Y, X) の X を banana で置き換えて、[(X, banana), (Y, banana)] とすると上手くいきます。この置き換えを apply と呼びます。まとめると、
+
+- 両辺の要素の数が同じ事を確認する。
+- 左側が変数になるような連想リストを作る(ちなみに、どっちも変数の時はどっちでも良いです)。
+- 連想リストに次の要素を継ぎ足す時は、変数を今まで分かっている値と置き換えてから継ぎ足す。
+
+プログラムで書くとこんな感じです。ユニフィケーションできない場合は Nothing を返します。
+
+>|haskell|
+true = []
+
+-- apply [(w"X", w"Y"), (w"Y", w"Z")] [(w"X"), (w"Y")] == [(w"Z"), (w"Z")]
+apply :: Substitution -> [Term] -> [Term]
+apply s ts = [applyTerm s t | t <- ts]
+
+applyTerm [] (Var y n)                                  = Var y n
+applyTerm ((Var x i, t):s) (Var y j) | x == y && i == j = applyTerm s t
+                                     | otherwise        = applyTerm s (Var y j)
+applyTerm s (Struct n ts)                               = Struct n (apply s ts)
+
+-- unify (w"X") (w"apple") == Just [(w"X", w"apple")]
+unify :: Term -> Term -> Maybe Substitution
+unify (Var x n) (Var y m) = Just [(Var x n, Var y m)]
+unify (Var x n)      y    = Just [(Var x n,       y)]
+unify      x    (Var y m) = Just [(Var y m,       x)]
+unify (Struct a xs) (Struct b ys)
+      | a == b = unifyList xs ys
+      | otherwise   = Nothing
+
+unifyList :: [Term] -> [Term] -> Maybe Substitution
+unifyList [] [] = Just true
+unifyList [] _ = Nothing
+unifyList _ [] = Nothing
+unifyList (x:xs) (y:ys) = do s <- unify x y
+                             s' <- unifyList (apply s xs) (apply s ys)
+                             return (s ++ s')
+||<
+
+** 検索
+
+もしもルールが一つで質問が一つしか無い場合は、ユニフィケーションだけで十分です。例えば (X, orange) = (apple, Y)
+>||
+r(X, orange).
+?- r(apple, Y).
+||<
+
+と書けます。だけど実際にはルールが沢山組合わさるのが普通で、沢山のルールを順番にユニフィケーションして行って最終的な答えを求めます。この検索順序はユニフィケーション自体とは独立した機能なので、混ぜて考えないよう注意してください。Prolog では、深さ優先探索と言って、可能性の木を端から順にからユニフィケーションして行きます。木の分岐点は二種類あって意味が全然違うので混ぜないでください。
+
+- ゴール (AND 関係) : ゴールはコンマで区切られた項の形で与えられます。ソース上では横に並びます。
+- 選択肢 (OR 関係) : 選択肢はあるゴールにユニフィケーション出来る頭部を持つルールです。ソース上では縦に並びます。
+
+検索木の枝の端には二つの場合があります。一つはゴールが真であると分かった場合で、apple. のように頭部はあるけど体部のないルールに当たった時です。もう一つは選択肢が無くなった場合です。ソースコード上では、ユニフィケーションが失敗すると unify 関数は Nothing を返すので maybeToList で選択肢のリストから除外しています。
+
+>|haskell|
+---- Solver ----
+
+prove :: Rules -> [Term] -> [Substitution]
+prove rules goals = find rules 1 goals
+
+-- Depth first search
+-- find (parse' clauses "p(X):-q(X). q(a).") 1 [parse' term "p(X)"]
+find :: Rules -> Int -> [Term] -> [Substitution]
+find rules i [] = [true]
+find rules i goals = do let rules' = rename rules i
+                        (s, goals') <- branch rules' goals
+                        solution <- find rules (i + 1) goals'
+                        return (s ++ solution)
+
+-- Find next branches. A branch is a pair of substitution and next goals.
+-- branch (parse' clauses "n(z). n(s(X)):-n(X).") (parse' query "?-n(X).")
+branch :: Rules -> [Term] -> [(Substitution, [Term])]
+branch rules (goal:goals) = do head :- body <- rules
+                               s <- maybeToList (unify goal head)
+                               return (s, apply s (body ++ goals))
+||<
+
+最後に重要なのが、find 関数で検索を始める前にデータベースに含まれる変数のインデックスを一括して書き換える事です。これで、別のルールに含まれる変数が違う事を保証します。apply は変数を値で置き換えますが、rename は変数のインデックスだけを書き換えます。データベースを全部書き換えるなんて富豪的ですが、実際には Hakell の素晴らしい遅延評価によって必要な分だけ書き換える事になります(多分)。
+
+>|haskell|
+-- Rename all variables in the rules to split namespaces.
+rename :: Rules -> Int -> Rules
+rename rules i = [ renameVar head :- renameVars body | head :- body <- rules]
+    where renameVar (Var s _)     = Var s i
+          renameVar (Struct s ts) = Struct s (renameVars ts)
+          renameVars ts           = [renameVar t | t <- ts]
+||<
+
+面白い部分はこれくらいです。あと、Parsec による文法や、型クラスを使った文字列表示や、継続渡しによるインタラクティブシェルの実装など、面白い話題は色々ありますがこの辺にしときます。
