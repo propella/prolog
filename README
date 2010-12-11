@@ -2,7 +2,7 @@ A pure prolog interpreter
 
 * Getting started
 
-$ runghc Prolog.hs
+$ runhaskell Main.hs
 or
 
 $ hugs Prolog.hs 
@@ -16,7 +16,7 @@ food(apple). -- Add a clause.
 
 * Example
 
-runghc Prolog.hs < demo.prolog
+runhaskell Main.hs < demo.prolog
 
 * Compile with ghc
 
