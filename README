@@ -17,3 +17,7 @@ food(apple). -- Add a clause.
 * Example
 
 runghc Prolog.hs < demo.prolog
+
+* Compile with ghc
+
+ghc --make Main.hs

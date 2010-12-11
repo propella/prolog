@@ -23,7 +23,7 @@ module Prolog
      parse, parse',
      atom, variable, struct, list, nil, terms, arguments, term, clause, clauses, query,
      display,
-     unify, unifyList, applyTerm, prove, rename, solveString) where
+     unify, unifyList, applyTerm, prove, rename, solveString, start) where
 
 import Text.ParserCombinators.Parsec
 import Data.Maybe (maybeToList)

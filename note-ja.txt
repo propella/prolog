@@ -173,3 +173,113 @@ rename rules i = [ renameVar head :- renameVars body | head :- body <- rules]
 ||<
 
 面白い部分はこれくらいです。あと、Parsec による文法や、型クラスを使った文字列表示や、継続渡しによるインタラクティブシェルの実装など、面白い話題は色々ありますがこの辺にしときます。
+
+* Haskell の Cabal を使う。
+
+いけがみさんの <a href="http://madscientist.jp/~ikegami/diary/20101208.html">Haskell Advent 2010 Day 3</a> を読んで、そう言えば昔書いたHaskell の Prolog を放置したままだと思い出しました。折角なので試しに Cabalというのをやってみよう。ちなみに私は Haskell Platform 2010.2.0.0 を使っています。
+
+まずソースコードの構成ですが、こんな感じです。
+
+- Prolog.hs : Prolog に必要な色々な関数が入っている。
+- Main.hs : main 関数が入っている。ここから実行。
+- test.hs : 単体テストが入っている。
+
+まず、念のためちゃんと動くかどうか確認します。普段はコンパイルせずに runhaskell や ghci を使ってるのですが、コンパイルするとしたらこんな感じ。
+
+>||
+$ ghc --main Main.hs
+||<
+
+実は、今までちゃんとコンパイルした事が無くて、この --main というオプションを探すのにえらい苦労しました。次に、いけがみさんの記事にあるように cabal init というコマンドで cabal ファイルを作ります。記事には、「ある程度時間をとられることを覚悟してください。」と書いてあったので変な事聞かれたらどうしよう！と思っていたのですが、質問は至って簡単です。名前とカテゴリに悩むくらいです。
+
+>||
+$ cabal init
+... 沢山の質問に答える。
+||<
+
+これで Setup.hs と cabal ファイルの二つが出来ます。cabal ファイルには沢山コメントが付きます。コメントを抜いたらこんな感じになりました。
+
+>||
+Name:                aprolog
+Version:             0.1
+Synopsis:            A pure prolog interpreter
+Homepage:            https://github.com/propella/prolog
+License:             MIT
+License-file:        LICENSE
+Author:              Takashi Yamamiya
+Maintainer:          tak@metatoys.org
+Category:            Language
+Build-type:          Simple
+Cabal-version:       >=1.2
+Executable aprolog
+||<
+
+では早速ためして見ましょう。パッケージをビルドするには、Setup.hs スクリプトにオプションを付けて実行します。
+
+>||
+$ runhaskell Setup configure --ghc
+Configuring aprolog-0.1...
+Error: No 'Main-Is' field found for executable aprolog
+||<
+
+あれま、エラーが出ます。エラーメッセージを頼りに色々追加して行くと次のようになりました。
+
+>||
+Name:                aprolog
+Version:             0.1
+Synopsis:            A pure prolog interpreter
+Homepage:            https://github.com/propella/prolog
+License:             MIT
+License-file:        LICENSE
+Author:              Takashi Yamamiya
+Maintainer:          tak@metatoys.org
+Category:            Language
+Build-type:          Simple
+Cabal-version:       >=1.2
+Executable aprolog
+  Main-is: Main.hs
+  Build-depends: haskell98, base, parsec
+||<
+
+多分 Build-depends の所はもっと丁寧に書いた方が良いと思います。再度ビルドしてみます。
+
+>||
+$ runhaskell Setup configure --ghc
+Configuring aprolog-0.1...
+$ runhaskell Setup build
+Preprocessing executables for aprolog-0.1...
+Building aprolog-0.1...
+[1 of 2] Compiling Prolog           ( Prolog.hs, dist/build/aprolog/aprolog-tmp/Prolo
+g.o )
+[2 of 2] Compiling Main             ( Main.hs, dist/build/aprolog/aprolog-tmp/Main.o 
+)
+Linking dist/build/aprolog/aprolog ...
+$ ./dist/build/aprolog/aprolog
+...
+||<
+
+おお、素晴らしい。次に、折角単体テストがあるので、これも Setup から呼び出せるようにしてみます。基本 Setup.hs を編集して、main = defaultMain の代わりにフック付きの defaultMainWithHooks を使って sysytem 関数で単体テストを呼び出すだけです。
+
+>|haskell|
+import Distribution.Simple
+import System.Cmd(system)
+
+main = defaultMainWithHooks (simpleUserHooks {runTests = runzeTests})
+runzeTests a b pd lb = system ( "runhaskell ./test.hs") >> return()
+||<
+
+細かい引数の意味は私も良くわかってなくてコピペしただけですが、次のようにして試す事が出来ます。
+
+>||
+$ runhaskell Setup test
+Cases: 37  Tried: 37  Errors: 0  Failures: 0
+Counts {cases = 37, tried = 37, errors = 0, failures = 0}
+||<
+
+パッケージ化すると、なんか立派な物を作った気分になれますね。作ったものは https://github.com/propella/prolog にあります。
+
+** 参考
+
+- Haskell Advent 2010 Day 3 http://madscientist.jp/~ikegami/diary/20101208.html
+- How to write a Haskell program http://www.haskell.org/haskellwiki/How_to_write_a_Haskell_program
+- Organising unit tests in Haskell http://blogs.linux.ie/balor/2009/07/05/organising-unit-tests-in-haskell/

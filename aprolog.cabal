@@ -1,0 +1,14 @@
+Name:                aprolog
+Version:             0.1
+Synopsis:            A pure prolog interpreter
+Homepage:            https://github.com/propella/prolog
+License:             MIT
+License-file:        LICENSE
+Author:              Takashi Yamamiya
+Maintainer:          tak@metatoys.org
+Category:            Language
+Build-type:          Simple
+Cabal-version:       >=1.2
+Executable aprolog
+  Main-is: Main.hs
+  Build-depends: haskell98, base, parsec
