@@ -18,12 +18,23 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 
+-- | A prolog interpreter.
 module Prolog
-    (Term(..), Clause(..), w, s, cons,
+    (-- * Data structures
+     Term(..), Clause(..),
+     -- * Utility constructors for debugging
+     w, s, cons,
+     -- * Reader
      parse, parse',
      atom, variable, struct, list, nil, terms, arguments, term, clause, clauses, query,
+     -- * Printer
      display,
-     unify, unifyList, applyTerm, prove, rename, solveString, start) where
+     -- * Unification
+     unify, unifyList, applyTerm,
+     -- * Solver
+     prove, rename,
+     -- * Testing
+     solveString, start) where
 
 import Text.ParserCombinators.Parsec
 import Data.Maybe (maybeToList)
@@ -51,7 +62,7 @@ cons s cdr = (Struct "cons" [w s, cdr])
 type Substitution = [(Term, Term)]
 true = []
 
--- apply [(w"X", w"Y"), (w"Y", w"Z")] [(w"X"), (w"Y")] == [(w"Z"), (w"Z")]
+-- | > apply [(w"X", w"Y"), (w"Y", w"Z")] [(w"X"), (w"Y")] == [(w"Z"), (w"Z")]
 apply :: Substitution -> [Term] -> [Term]
 apply s ts = [applyTerm s t | t <- ts]
 
@@ -60,7 +71,7 @@ applyTerm ((Var x i, t):s) (Var y j) | x == y && i == j = applyTerm s t
                                      | otherwise        = applyTerm s (Var y j)
 applyTerm s (Struct n ts)                               = Struct n (apply s ts)
 
--- unify (w"X") (w"apple") == Just [(w"X", w"apple")]
+-- | > unify (w"X") (w"apple") == Just [(w"X", w"apple")]
 unify :: Term -> Term -> Maybe Substitution
 unify (Var x n) (Var y m) = Just [(Var x n, Var y m)]
 unify (Var x n)      y    = Just [(Var x n,       y)]
@@ -83,7 +94,7 @@ prove :: Rules -> [Term] -> [Substitution]
 prove rules goals = find rules 1 goals
 
 -- Depth first search
--- find (parse' clauses "p(X):-q(X). q(a).") 1 [parse' term "p(X)"]
+-- > find (parse' clauses "p(X):-q(X). q(a).") 1 [parse' term "p(X)"]
 find :: Rules -> Int -> [Term] -> [Substitution]
 find rules i [] = [true]
 find rules i goals = do let rules' = rename rules i
@@ -92,13 +103,13 @@ find rules i goals = do let rules' = rename rules i
                         return (s ++ solution)
 
 -- Find next branches. A branch is a pair of substitution and next goals.
--- branch (parse' clauses "n(z). n(s(X)):-n(X).") (parse' query "?-n(X).")
+-- > branch (parse' clauses "n(z). n(s(X)):-n(X).") (parse' query "?-n(X).")
 branch :: Rules -> [Term] -> [(Substitution, [Term])]
 branch rules (goal:goals) = do head :- body <- rules
                                s <- maybeToList (unify goal head)
                                return (s, apply s (body ++ goals))
 
--- Rename all variables in the rules to split namespaces.
+-- | Rename all variables in the rules to split namespaces.
 rename :: Rules -> Int -> Rules
 rename rules i = [ renameVar head :- renameVars body | head :- body <- rules]
     where renameVar (Var s _)     = Var s i
@@ -246,11 +257,17 @@ nextLine (x:xs)    = (x:ys, zs) where (ys, zs) = nextLine xs
 
 ---- Testing ----
 
--- solveString "p:-q. q:-r. r." "?-p."
+-- | Test function
+-- 
+-- >>> solveString "p:-q. q:-r. r." "?-p."
+-- > [[]]
+-- >>> solveString' "p(X):-q(X).q(a)." "?-p(X)."
+-- > ["X=X_1,X_1=a"]
+
+solveString :: String -> String -> [Substitution]
 solveString rules q =
     let rules' = parse' clauses rules
         q' = parse' query q
     in prove rules' q'
 
--- solveString' "p(X):-q(X).q(a)." "?-p(X)."
 solveString' rules q = [display s | s <- solveString rules q]
